@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-11-21（第 7 轮）仓库补上 MIT 协议并推送
+
+### 本次完成
+1. **新增 `LICENSE`**：MIT 标准全文（GitHub 模板原文，1 069 B），版权行
+   `Copyright (c) 2026 cqwuxiaolong`。此前仓库根目录没有任何许可文件，GitHub 侧显示「View license」缺失。
+2. **`package.json` 补元信息**：新增 `"license": "MIT"`、`"author": "cqwuxiaolong"`、
+   `"repository": { "type": "git", "url": "git+https://github.com/cqwuxiaolong/hf-ui.git" }`。
+   其余字段未动，JSON 合法性用 `node -e "require('./package.json')"` 验证。
+3. **README**：标题下加 `[![License: MIT](…)](LICENSE)` 徽章，末尾新增「许可」一节（中文摘要 + 指向 `LICENSE`）。
+4. **提交并推送**：`LICENSE` + `package.json` + `README.md` + `STATUS.md` 同一个 commit 推到 `origin/main`。
+
+### 未完成与挂账
+- **单文件产物内没有许可文件**：`scripts/build-sea.mjs` 的内嵌资源只装 `web/**` 与 `bin/xet-dl`，
+  Releases 里的可执行文件不带 `LICENSE`。要随包分发许可，需在 `build-sea.mjs` 的资源清单里加 `LICENSE`
+  并让 `--help`/`--version` 或某个只读接口能打印它，本轮未做。
+- 第 6 轮的挂账（包体未优化、产物不可复现、macOS 未公证 / Windows 未签名、macOS 仅 arm64、
+  Linux glibc ≥ 2.35 基线）本轮未涉及，口径仍见第 6 轮。
+
+### 验证与版本
+- `node -e "const p=require('./package.json');console.log(p.license,p.author,p.repository.url)"`
+  → `MIT cqwuxiaolong git+https://github.com/cqwuxiaolong/hf-ui.git`（JSON 可解析，字段生效）。
+- `LICENSE` 用的是 GitHub MIT 模板逐字全文（仅替换版权行），`git hash-object LICENSE` =
+  `ec957f59ab5fc55cd359a1ff77bace513078dbd8`。
+- **GitHub 已识别为 MIT**：推送后 `gh api repos/cqwuxiaolong/hf-ui --jq .license.spdx_id` → `MIT`。
+- 远端：推送后 `origin/main` 即本轮提交（`git rev-parse HEAD` == `git ls-remote origin main`）；
+  标签 `v1.0.0` 仍指向 `3046fec`，本轮未动 Release。
+- 工具与版本：gh 2.28.0（账号 cqwuxiaolong）、node v26.13.1、pnpm 12.21.0（本轮未装/未改依赖）。
+
+### 跳过项
+- 本轮只改许可与文档元信息，**未重新构建三平台产物、未重新发 Release**，因此不需要跑 CI；
+  不存在「因禁止安装桌面 app 而跳过」的项（未安装任何桌面 app / GUI / 系统浏览器）。
+
+---
+
 ## 2026-11-21（第 6 轮）服务器编译成单个可执行文件（内嵌 Web）+ 三平台 Release 工作流
 
 ### 本次完成

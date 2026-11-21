@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Hugging Face 模型搜索 / 文件大小查看 / 下载管理器（hf-mirror 镜像）",
+  "license": "MIT",
+  "author": "cqwuxiaolong",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cqwuxiaolong/hf-ui.git"
+  },
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,magenta \"PORT=2271 node --watch server/index.js\" \"vite\"",
     "build": "vite build",

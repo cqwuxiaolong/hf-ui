@@ -1,5 +1,7 @@
 # HF 模型管理器
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 一个基于 **pnpm + Vite + Express + @huggingface/hub** 的本地 Web 工具（默认端口 **2270**）：
 
 - 🔍 搜索 Hugging Face 模型（默认走 `hf-mirror.com` 镜像）
@@ -254,3 +256,9 @@ vite.config.js
   ```bash
   HOST=127.0.0.1 pnpm start
   ```
+
+## 许可
+
+本项目基于 **MIT 协议** 开源，详见 [LICENSE](LICENSE)。
+简言之：你可以自由使用、复制、修改、合并、出版、分发、再授权及/或销售本软件的副本，
+只需在副本或重要部分中保留版权声明与本许可声明；软件按「现状」提供，不含任何明示或暗示的保证。
