@@ -44,19 +44,60 @@
 5. **文档**：README 新增「单文件版（Releases 下载）」（平台表、`chmod`/`xattr`/SmartScreen、下载目录与设置
    回退、xet-dl 释放路径、`.sha256` 校验、自己打单文件包的命令、CI 说明）与「命令行参数」一节；
    「目录结构」补 `server/sea.js`、`server/webroot.js`、`scripts/build-sea.mjs`、`.github/workflows/release.yml`。
+6. **CI 三平台全绿并出 Release**（推 `v1.0.0` 标签触发，run `44912837325`）：Linux x86_64 / macOS Apple
+   Silicon / Windows x86_64 三块 matrix 各自「编译 xet-dl → 打单文件 → 起进程做 HTTP 冒烟」全部通过，
+   `release` job 汇总成 GitHub Release（6 个附件：3 个可执行 + 3 个 `.sha256`）。途中修掉三个只在 runner
+   上暴露的问题，详见「验证与版本」：pnpm 12 的构建脚本白名单口径、macOS runner 标签、xet-dl 的 Windows 编译。
+7. **`native/xet-dl/src/main.rs` 按平台取已落盘字节数**：原先无条件 `use std::os::unix::fs::MetadataExt` +
+   `md.blocks()`，Windows（MSVC）上没有 `std::os::unix` 直接编译失败。改为 `allocated_bytes(&Metadata)`：
+   `#[cfg(unix)]` 走 `blocks()*512`，`#[cfg(not(unix))]` 退到 `md.len()`（Windows 的稀疏统计语义不同，
+   这里只用于「已下载多少」的展示与续传判断，取文件长度更直白）。调用处 `md.as_ref().map(allocated_bytes)`。
+8. **依赖白名单改口径**：pnpm 12 不再读 `package.json` 里的 `pnpm` 字段，`onlyBuiltDependencies` 失效，
+   CI 上 `pnpm install --frozen-lockfile` 会以 `ERR_PNPM_IGNORED_BUILDS(esbuild)` 失败。改为在
+   `pnpm-workspace.yaml` 写 `allowBuilds: { esbuild: true }`，并从 `package.json` 删掉失效的 `pnpm` 字段。
+   已在干净目录（`/tmp/citest3`，只有本仓 + `pnpm-lock.yaml`）复跑 `pnpm install --frozen-lockfile` 通过。
+9. **macOS runner 标签**：`macos-14` 在本账号下被拒（annotation：The configuration
+   'macos-14-arm64-us-default' is not supported），临时探测 workflow 实测 `macos-latest` ✓、`macos-15` ✓、
+   `macos-14` ✗、`macos-13` 排队 10 分钟仍未分配（容量紧张）。matrix 定为 `macos-latest`，探测用的临时
+   workflow 已删除。
 
 ### 未完成与挂账
-- **三平台 CI 尚未实跑**：本轮只有 Linux x86_64 产物在本机验证过。推标签后需盯 `gh run watch`，
-  重点风险：① Windows runner 的 NASM/CMake（xet-dl 依赖，workflow 里已加 choco 兜底）；
-  ② `ubuntu-22.04` runner 是否仍可用（决定 glibc 基线，改成 `ubuntu-24.04` 会把基线抬到 2.39）；
-  ③ macOS codesign 与 Gatekeeper；④ `--build-sea` 在 Windows 的产物命名（脚本已处理重复 `.exe`）。
-  跑通后把 Release 链接与 tag 记回本文件。
+- **产物体积 110–165 MB 未优化**：底座是 setup-node 装的官方 Node（未 strip），CI 包因此比本机自研包大一倍
+  （Linux 166 MB vs 本机 82 MB）。要瘦身可选：① 打包前 `strip` 底座 Node；② 产物上 UPX（Windows 上 UPX 常被
+  杀软误报，得先评估）。两者都会让「启动冒烟」重新变成必测项，暂未做。
+- **产物不可复现**：同一份代码两次 CI 构建出的 Linux 包 sha256 不同
+  （run `44910670041` 是 `122fda5c…`，run `44912837325` 是 `fa770abb…`），大小一致但字节不一致
+  （SEA 内嵌资源顺序 / 构建时间戳进了镜像）。要可复现得固定 `SOURCE_DATE_EPOCH` 并核对打包脚本，未做；
+  目前以「每次 Release 附件自带的 `.sha256`」为准，不跨版本对比。
+- **macOS 未做公证 / Windows 未做代码签名**：macOS 只有 ad-hoc 签名（`codesign --sign -`），首次打开要
+  `xattr -dr com.apple.quarantine`；Windows 首次运行会撞 SmartScreen「未知发布者」。买证书后需在 workflow
+  里接 `codesign` + `notarytool` 与 `signtool`，未做。
 - **macOS 只出 Apple Silicon（arm64）**：Intel mac（macos-x64）暂无 runner 覆盖，需要时补 `macos-13`。
 - **Linux 基线是 glibc ≥ 2.35**（在 ubuntu-22.04 runner 上编译）：更老的发行版（CentOS 7 / Debian 11）
   跑不起来，README 平台表已注明；要更宽兼容需改为在静态 musl / 更老容器里构建，未做。
 
 ### 验证与版本
-- 出包：`node scripts/build-sea.mjs` → `release-build/hf-ui-linux-x64` **81 831 704 B**，
+- **远端**：标签 `v1.0.0` 指向 `3046fec`（`+ 377474d...3046fec v1.0.0 -> v1.0.0 (forced update)`），
+  `main` 在其后仅追加本轮文档提交。
+- **CI run `44912837325`（推 `v1.0.0` 触发，由 Actions 自己发布）**：Linux x86_64 / macOS Apple Silicon /
+  Windows x86_64 三块 matrix + `release` 汇总 job **全绿**，
+  Release 页 https://github.com/cqwuxiaolong/hf-ui/releases/tag/v1.0.0 （publishedAt 2026-11-21T14:20:12Z，
+  6 个附件：3 个可执行 + 3 个 `.sha256`）。
+  在此之前 run `44910670041`（手动触发）已让三平台构建 + 冒烟全绿；`release` job 首次（run `44911542515`）
+  因缺 checkout 报「failed to run git: fatal: not a git repository」，补 `GH_REPO` 后闭环。
+- **Release 附件（`gh api …/releases/tags/v1.0.0` 的服务端 digest）**：
+  `hf-ui-linux-x64` 166 571 136 B `fa770abb57d4bee198a606e49553624fdf6b7a22d1bd24f136b5e412d588a71a`、
+  `hf-ui-macos-arm64` 158 719 120 B `3d20359145660875b7787afdafbeef114b36328f1ed20bee07078f83a684373c`、
+  `hf-ui-windows-x64.exe` 115 102 536 B `0798d57c89fa7145da958fbb66e53ab469b562d0f63037b9577f742a2b49f7d1`。
+  三个附件自带的 `.sha256` 内容与 GitHub 服务端算出的 digest **逐条一致**（打包脚本的校验文件没写错）。
+  注：与上一版（run `44910670041` 的 Artifacts）字节不同属正常——不同 runner 上的 Node 底座与 Rust 构建，
+  未做可复现构建。
+- **CI 的 Linux 产物搬到本机（glibc 2.44）真跑通**（`/tmp/cirun`，端口 2274）：横幅「运行形态 → 单文件
+  （目标 linux-x64，前端与 xet-dl 已内嵌）· 程序目录 /tmp/cirun」；`/` 200 text/html、`/api/tasks` 200、
+  `/api/config` 200、`/assets/index-kU_0k8CQ.js` 200 且带 `ETag` 与 `Cache-Control: public, max-age=31536000, immutable`；
+  真实下载 `HuggingFaceTB/SmolLM2-135M/model.safetensors` → **engine=xet、status done**，
+  成品 269 060 552 B，内嵌下载器已释放到 `~/.cache/hf-web-manager/bin/1.0.0/xet-dl`（13 090 192 B，CI 那份 Rust 构建）。
+- 本机自研出包：`node scripts/build-sea.mjs` → `release-build/hf-ui-linux-x64` **81 831 704 B**，
   `sha256 = 0b31b82e7f13f9a4451af04ec8f5efc78adc7dcf53173f0ecc9701936d3326ce`。
 - **脱离仓库运行**（在 `/tmp/hfsearun` 启动 exe）：横幅显示「运行形态 → 单文件（目标 linux-x64…）」。
 - HTTP 全绿：`/` 200（text/html 9 403 B，`Cache-Control: no-cache`）、`/index.html` 200、
@@ -74,7 +115,11 @@
 ### 跳过项
 - 本轮新增的验证全部走命令行（curl / 直接起 exe），**未安装任何桌面 app / GUI / 系统浏览器**，
   也不存在「因禁止安装桌面 app 而跳过」的项。
-- Windows / macOS 产物本机无法验证（不在本机平台，且 SEA 不能交叉编译），只能在 CI 的对应 runner 上冒烟。
+- Windows / macOS 产物本机无法验证（不在本机平台，且 SEA 不能交叉编译），只能依赖 CI 对应 runner 上的
+  启动冒烟（起进程 + 校验首页/内嵌 js/`/api/config`）；本机 `cargo check --target x86_64-pc-windows-msvc`
+  也做不了——build script 需要 MSVC `lib.exe`，本机没装（属禁止安装范围），所以 Windows 的 Rust 编译
+  只能在 runner 上验证（已通过）。
+- 因禁止安装桌面 app / GUI 浏览器，本轮所有验证走命令行（curl / 直接起可执行文件），无额外跳过项。
 - 未做代码签名证书 / macOS 公证（仅 ad-hoc 签名），未加自动更新检查。
 
 ---

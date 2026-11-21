@@ -38,8 +38,10 @@ pnpm start
 | 文件 | 平台 |
 | --- | --- |
 | `hf-ui-linux-x64` | Linux x86_64（glibc ≥ 2.35，Ubuntu 22.04 / Debian 12 / Fedora 38 起） |
-| `hf-ui-macos-arm64` | Apple Silicon（macOS 12+） |
+| `hf-ui-macos-arm64` | Apple Silicon（在 GitHub 的 Apple Silicon runner 上构建） |
 | `hf-ui-windows-x64.exe` | Windows 10 / 11 x86_64 |
+
+包体 110–165 MB 左右：里面是一个完整的 Node 运行时（未 strip）加前端与下载器，暂未做 UPX / 压缩优化。
 
 ```bash
 # Linux / macOS
