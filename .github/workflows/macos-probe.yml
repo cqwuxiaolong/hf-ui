@@ -1,0 +1,17 @@
+name: 临时：探测可用的 macOS runner 标签
+
+# 一次性探测用（macos-14 报「configuration not supported」）；确认后删除本文件。
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: probe ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15, macos-13, macos-14]
+    steps:
+      - run: sw_vers && uname -m && node --version 2>/dev/null || true

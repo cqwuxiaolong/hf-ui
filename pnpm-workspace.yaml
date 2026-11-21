@@ -1,3 +1,5 @@
-# pnpm 允许执行构建脚本的依赖（esbuild 需要 postinstall 校验平台二进制）
-onlyBuiltDependencies:
-  - esbuild
+# pnpm 12 起这个设置搬到 pnpm-workspace.yaml（package.json 的 pnpm 字段已被忽略）。
+# esbuild 的 postinstall 会校验/下载平台原生二进制，必须放行，否则 install 直接报
+# ERR_PNPM_IGNORED_BUILDS。
+allowBuilds:
+  esbuild: true
