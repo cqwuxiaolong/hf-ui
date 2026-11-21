@@ -1,0 +1,33 @@
+# 独立 crate（不属于任何 workspace）。
+# 用 hf-xet（crates.io 上 xet-core 的发布名，lib 名为 `xet`）做多连接 Xet 下载，
+# 编译成独立二进制，由 server/downloads.js 以子进程方式调用，stdout 输出 NDJSON 进度。
+[workspace]
+
+[package]
+name = "xet-dl"
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Xet (hf-xet) downloader for the hf web manager: NDJSON progress on stdout"
+publish = false
+
+[[bin]]
+name = "xet-dl"
+path = "src/main.rs"
+
+[dependencies]
+hf-xet = { version = "1.8.1", default-features = false, features = ["rustls-tls"] }
+# 续传完成后整体校验用（Xet 的 range 重建不校验 sha256，得自己兜底）
+sha2 = "0.11"
+
+# cargo-machete 无法把包名 hf-xet 与源码里的 `xet::` 对应起来
+[package.metadata.cargo-machete]
+ignored = ["hf-xet"]
+
+# 内存紧张的机器上优先保证能编过：不做 LTO、不带调试符号
+[profile.release]
+lto = false
+opt-level = 3
+codegen-units = 16
+debug = 0
+strip = "symbols"

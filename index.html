@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HF 模型管理器 · 搜索 / 文件大小 / 下载</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">HF</span>
+        <div>
+          <h1>模型管理器</h1>
+          <p>搜索 · 查看文件大小 · Xet 多连接高速下载</p>
+        </div>
+      </div>
+      <div class="topbar-meta" id="topbar-meta"></div>
+    </header>
+
+    <main class="layout" id="layout">
+      <aside class="sidebar">
+        <form class="search" id="search-form">
+          <input
+            id="q"
+            type="search"
+            placeholder="搜索模型，或粘贴 owner/name"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="submit" class="btn primary">搜索</button>
+
+          <!-- 搜索历史（localStorage：hf.searchHistory） -->
+          <div class="history hidden" id="search-history"></div>
+        </form>
+
+        <div class="toolbar">
+          <select id="sort" title="排序">
+            <option value="downloads">按下载量</option>
+            <option value="likes">按点赞数</option>
+            <option value="lastModified">按最近更新</option>
+            <option value="trendingScore">按热度</option>
+            <option value="createdAt">按创建时间</option>
+          </select>
+          <select id="limit" title="数量">
+            <option value="20">20 条</option>
+            <option value="30" selected>30 条</option>
+            <option value="50">50 条</option>
+            <option value="100">100 条</option>
+          </select>
+        </div>
+
+        <div class="results" id="results">
+          <div class="empty small">输入关键字开始搜索，例如 <code>DeepSeek-V4.1-Flash</code></div>
+        </div>
+      </aside>
+
+      <section class="detail" id="detail">
+        <div class="empty big">
+          <div class="empty-icon">◧</div>
+          <h2>选择一个模型</h2>
+          <p>在左侧搜索结果中点击任意模型，即可查看全部文件与大小，并开始下载。</p>
+        </div>
+      </section>
+
+      <aside class="rail" id="rail">
+        <div class="rail-head">
+          <div class="rail-tabs">
+            <button class="rail-tab active" data-tab="tasks">
+              下载任务 <span class="tab-badge" id="task-badge">0</span>
+            </button>
+            <button class="rail-tab" data-tab="local">已下载文件</button>
+          </div>
+          <button class="rail-toggle" id="rail-toggle" title="收起 / 展开右栏">»</button>
+        </div>
+
+        <div class="rail-dir">
+          <div class="dir-label">
+            <span>下载目录</span>
+            <button class="link-btn" id="copy-dir" title="复制完整路径">复制</button>
+          </div>
+          <div class="dir-row">
+            <input id="dir-input" class="mono" spellcheck="false" placeholder="/path/to/downloads" />
+          </div>
+          <div class="dir-actions">
+            <button class="btn sm" id="dir-pick">📁 选择目录</button>
+            <button class="btn sm primary" id="dir-save">保存</button>
+          </div>
+          <div class="dir-meta" id="dir-meta"></div>
+        </div>
+
+        <div class="rail-dir rail-xet">
+          <div class="dir-label">
+            <span>Xet 下载调优</span>
+            <button class="btn sm primary" id="xet-save">保存</button>
+          </div>
+          <label class="xet-check" title="下载并发上限 64 → 124、起始并发 4 → 16；缓冲区仍受下面的内存预算限制，不会按整机内存放大">
+            <input type="checkbox" id="xet-hp" />
+            <span>高性能模式（并发更高）</span>
+          </label>
+          <div class="dir-row">
+            <input id="xet-budget" class="mono" type="number" min="128" max="32768" step="128"
+                   spellcheck="false" title="xet 子进程下载缓冲区内存预算（MB）" />
+            <span class="xet-unit">MB 内存预算</span>
+          </div>
+          <div class="dir-meta" id="xet-meta"></div>
+        </div>
+
+        <div class="rail-body" id="rail-body"></div>
+        <div class="rail-foot" id="rail-foot"></div>
+      </aside>
+    </main>
+
+    <button class="rail-launcher" id="rail-launcher" type="button" title="展开下载面板" aria-label="展开下载面板" hidden>
+      <span class="rl-icon">⇩</span>
+      <span class="rl-text">任务</span>
+      <span class="rl-badge zero" id="rail-badge">0</span>
+    </button>
+
+    <div class="toast" id="toast"></div>
+
+    <!-- 目录选择器 -->
+    <div class="modal-backdrop hidden" id="dir-modal">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="选择下载目录">
+        <header class="modal-head">
+          <div>
+            <h3>选择下载目录</h3>
+            <p>浏览本机目录，选中后立即切换下载位置</p>
+          </div>
+          <button class="modal-close" id="dir-modal-close" title="关闭">✕</button>
+        </header>
+
+        <div class="modal-body">
+          <aside class="fs-side">
+            <div class="fs-side-title">我的电脑</div>
+            <div class="fs-roots" id="fs-roots">
+              <div class="fs-loading"><span class="spinner"></span> 读取磁盘…</div>
+            </div>
+          </aside>
+
+          <section class="fs-main">
+            <div class="fs-toolbar">
+              <button class="btn sm ghost" id="fs-up" title="上一级">↑</button>
+              <input id="fs-path" class="fs-path mono" spellcheck="false" />
+              <button class="btn sm ghost" id="fs-go">前往</button>
+              <button class="btn sm ghost" id="fs-refresh" title="刷新列表">刷新</button>
+              <label class="fs-check">
+                <input type="checkbox" id="fs-show-hidden" /> 显示隐藏
+              </label>
+            </div>
+            <div class="fs-crumbs" id="fs-crumbs"></div>
+            <div class="fs-list" id="fs-list"></div>
+          </section>
+        </div>
+
+        <footer class="modal-foot">
+          <div class="fs-current">
+            <span class="muted">当前目录</span>
+            <span class="mono" id="fs-current-path"></span>
+          </div>
+          <div class="fs-disk" id="fs-disk"></div>
+          <span class="spacer"></span>
+          <button class="btn ghost sm" id="fs-mkdir">＋ 新建文件夹</button>
+          <button class="btn sm" id="dir-cancel">取消</button>
+          <button class="btn primary sm" id="dir-choose">选择此目录</button>
+        </footer>
+      </div>
+    </div>
+
+    <!-- README / 模型卡片 -->
+    <div class="modal-backdrop hidden" id="readme-modal">
+      <div class="modal readme-modal" role="dialog" aria-modal="true" aria-label="模型 README">
+        <header class="modal-head">
+          <div style="min-width:0">
+            <h3>README · 模型卡片</h3>
+            <p class="mono" id="readme-repo"></p>
+          </div>
+          <div class="readme-head-actions">
+            <a class="btn ghost sm" id="readme-external" target="_blank" rel="noreferrer">在镜像站打开 ↗</a>
+            <button class="modal-close" id="readme-close" title="关闭（Esc）">✕</button>
+          </div>
+        </header>
+        <div class="readme-body" id="readme-body"></div>
+      </div>
+    </div>
+
+    <!-- 访问令牌 -->
+    <div class="modal-backdrop hidden" id="token-modal">
+      <div class="modal token-modal" role="dialog" aria-modal="true" aria-label="配置访问令牌">
+        <header class="modal-head">
+          <div>
+            <h3>HF 访问令牌</h3>
+            <p>下载私有 / 门控仓库才需要；只存在本机 settings.json（权限 600），界面与接口都只显示掩码</p>
+          </div>
+          <button class="modal-close" id="token-modal-close" title="关闭（Esc）">✕</button>
+        </header>
+
+        <div class="token-body">
+          <label class="token-label" for="token-input">令牌</label>
+          <div class="dir-row">
+            <input id="token-input" class="mono" type="password" spellcheck="false" autocomplete="off"
+                   placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+            <label class="fs-check"><input type="checkbox" id="token-show" /> 显示</label>
+          </div>
+          <div class="token-meta" id="token-meta"></div>
+          <p class="token-tip">
+            在 <a id="token-link" href="#" target="_blank" rel="noreferrer">镜像站 settings/tokens</a>
+            创建，Read 权限就够。保存前会先向镜像站校验一次。<br />
+            留空保存 = 明确不使用令牌（连启动时的 <code>HF_TOKEN</code> 环境变量也一起忽略）。
+          </p>
+        </div>
+
+        <footer class="modal-foot">
+          <span class="spacer"></span>
+          <button class="btn ghost sm" id="token-clear">清除令牌</button>
+          <button class="btn sm" id="token-cancel">取消</button>
+          <button class="btn primary sm" id="token-save">保存</button>
+        </footer>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

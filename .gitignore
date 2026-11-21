@@ -1,0 +1,10 @@
+node_modules
+dist
+downloads
+*.log
+.env
+settings.json
+
+# Rust 下载器构建产物与本地二进制
+native/*/target
+native/bin/
