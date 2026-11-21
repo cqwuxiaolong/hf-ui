@@ -1,6 +1,38 @@
 # STATUS
 
-滚动收尾状态文档：最新条目在最上方。历史全文见本文件（本仓非 git 仓库，无台账分离）。
+滚动收尾状态文档：最新条目在最上方。历史全文见本文件（本仓已入 git，历史全文同时由 git 历史承载）。
+
+---
+
+## 2026-11-21（第 5 轮）GitHub 建仓并推送
+
+### 本次完成
+1. **本地 git 首次提交**：此前仓库只有 `.git` 目录、零提交、零远端。`git add -A` 后入库 23 个文件共 420 KB
+   （`node_modules`、`dist`、`downloads`、`settings.json`、`native/*/target`、`native/bin/` 全部按 `.gitignore` 排除）；
+   主分支由 `master` 改名为 `main`；提交 `ab39041`「初始化提交：HF 模型搜索/下载管理器（Vite + Express + Rust Xet 下载器）」。
+2. **GitHub 建仓 + 推送**：`gh repo create hf-ui --public --source=. --remote=origin --push`
+   → https://github.com/cqwuxiaolong/hf-ui ，默认分支 `main`，本地 `main` 已设置跟踪 `origin/main`。
+   仓库名取目录名 `hf-ui`，描述沿用 `package.json` 的 description。
+3. **公开前的密钥扫描**（因为选了 public）：全库 `git grep` 无真实 `hf_*` / `ghp_*` / `gho_*` / `sk-*` 令牌，
+   仅 `index.html:202`、`src/main.js:1783` 两处 `hf_xxxxx…` 占位符；含 `hfToken` 的 `settings.json` 本就在 `.gitignore` 里，未入库。
+
+### 未完成与挂账
+- 本轮为纯建仓/推送，无代码改动，也没有新闭环的旧挂账：第 4 轮条目里的挂账（掉电最坏 64 MiB 页缓存窗口是否补
+  `sync_data()` 等）本轮未触碰，仍以下方条目为准。
+- 两个默认值是我替你定的，需要改只需一条命令：可见性 `public`（与账号下自有仓一致）→
+  `gh repo edit cqwuxiaolong/hf-ui --visibility private`；仓库名 `hf-ui` → GitHub 上改名后本地
+  `git remote set-url origin https://github.com/cqwuxiaolong/<新名>.git`。
+
+### 验证与版本
+- 本地：`git log --oneline` → `ab39041`；`git rev-parse HEAD` = `ab3904106e0f8505e4ec164eb198a19ce2392897`；`git status` 干净。
+- 远端：`git ls-remote origin` 的 `HEAD` 与 `refs/heads/main` 同为 `ab390410…92897`（远端 = 本地，无未推提交）。
+- `gh repo view --json` → `visibility=PUBLIC`、`defaultBranchRef=main`、`isEmpty=false`、`createdAt=2026-11-21T12:36:15Z`。
+- 工具：`gh 2.28.0`，账号 `cqwuxiaolong`（token scopes：gist / read:org / repo，HTTPS 协议）。
+
+### 跳过项
+- 只按「建仓 + 推送」执行，未创建 GitHub Projects / Issues / Labels / Releases，也未加 `.github/workflows` CI
+  （未被要求，需要时再补）。
+- 无「因禁止安装桌面 app 而跳过」的验证项；本轮全程命令行（`git` / `gh`），未安装任何新工具。
 
 ---
 
