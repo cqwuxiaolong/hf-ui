@@ -467,7 +467,6 @@ fn run(args: &Args) -> Result<(), String> {
     // 进度来源：hf-xet 的「下载到文件」是随机偏移写入（多连接并行），上游只对*流式*下载上报
     // 增量进度，handle.progress() 经常是 0 或一次跳几十 MB。这里改用落盘量：已分配块数
     // （st_blocks ≈ 已收到的字节数，未到达的空洞不占块）与文件长度取较大者，上限夹到文件大小。
-    use std::os::unix::fs::MetadataExt;
 
     let interval = args.progress_interval;
     let stop = Arc::new(AtomicBool::new(false));
@@ -480,7 +479,7 @@ fn run(args: &Args) -> Result<(), String> {
         std::thread::spawn(move || loop {
             let md = std::fs::metadata(&dest).ok();
             let apparent = md.as_ref().map(|m| m.len()).unwrap_or(0);
-            let allocated = md.as_ref().map(|m| (m.blocks() as u64) * 512).unwrap_or(0);
+            let allocated = md.as_ref().map(allocated_bytes).unwrap_or(0);
             let item = handle.progress().map(|p| p.bytes_completed).unwrap_or(0);
             let mut shown = allocated.max(item);
             if apparent > 0 && shown > apparent {
@@ -556,6 +555,19 @@ fn run(args: &Args) -> Result<(), String> {
 ///   顺序队列，`blocking_next()` 出来的分片严格递增，所以文件长度始终等于「已校验前缀」。
 /// - Xet 的 range 重建只用 merkle hash + file_size，sha256 不参与下载期校验，因此中途续传
 ///   不会因为哈希报错；但正因为它不校验，续传完成后必须自己整体 sha256 兜底。
+/// 「已落盘字节数」的近似值：unix 用 st_blocks × 512（未到达的空洞不占块，正好反映已收到的量）；
+/// Windows 没有对应字段，退回文件表观长度（此时进度显示偏乐观，但不会误判卡死）。
+#[cfg(unix)]
+fn allocated_bytes(md: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    (md.blocks() as u64) * 512
+}
+
+#[cfg(not(unix))]
+fn allocated_bytes(md: &std::fs::Metadata) -> u64 {
+    md.len()
+}
+
 /// - 中途中断（网络错 / 被 SIGKILL）时前缀依然有效：不删文件、状态文件留着，下次接着下。
 ///   只有长度不符或 sha256 不匹配才标记 corrupt，让调用方删掉半成品。
 fn run_resume(
