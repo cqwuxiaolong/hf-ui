@@ -155,6 +155,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          # 本 job 没有 checkout，工作目录不是 git 仓库；不给 GH_REPO，
+          # gh 会去问 git「这是哪个仓库」然后 fatal: not a git repository。
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           ls -l artifacts
