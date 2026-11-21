@@ -8,11 +8,23 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { ENDPOINT, authHeaders, getToken, resolveUrl } from "./hf.js";
 import { loadSettings, saveSettings } from "./settings.js";
+import { IS_SEA, appDir, dataHome, extractXetBinary, isWritable } from "./sea.js";
+
+/**
+ * 默认下载目录。普通部署沿用 cwd/downloads（历史行为）；单文件版不能指望 cwd
+ * （双击启动时 cwd 就是 exe 所在目录，但用 systemd / 服务包装时未必），所以
+ * 优先 exe 旁边的 downloads/，那里不可写就退到用户数据目录。
+ */
+function defaultDownloadDir() {
+  if (!IS_SEA) return path.join(process.cwd(), "downloads");
+  const nextToExe = path.join(appDir(), "downloads");
+  return isWritable(appDir()) ? nextToExe : path.join(dataHome(), "downloads");
+}
 
 function initialDownloadDir() {
   const fromEnv = process.env.DOWNLOAD_DIR;
   const fromSettings = loadSettings().downloadDir;
-  return path.resolve(fromEnv || fromSettings || path.join(process.cwd(), "downloads"));
+  return path.resolve(fromEnv || fromSettings || defaultDownloadDir());
 }
 
 let downloadDir = initialDownloadDir();
@@ -104,11 +116,21 @@ const HEADERS_TIMEOUT = Math.max(5000, Number(process.env.HEADERS_TIMEOUT_MS ?? 
 // 两个引擎都能续传：fetch 走 HTTP Range；Xet 走流式 range 下载（download_stream_blocking），
 // 它的落盘是严格顺序的，文件长度始终等于有效前缀，所以中断后能接着下（见 native/xet-dl）。
 const DOWNLOAD_ENGINE = (process.env.DOWNLOAD_ENGINE || "auto").toLowerCase(); // auto | xet | fetch
-const XET_BIN_CANDIDATES = [
-  process.env.XET_DL_BIN,
-  path.join(process.cwd(), "native/bin/xet-dl"),
-  path.join(process.cwd(), "native/xet-dl/target/release/xet-dl"),
-].filter(Boolean);
+// 下载器位置的优先级：环境变量 → 单文件版内嵌（释放到缓存目录）→ 程序目录旁的构建产物 → cwd。
+// 单文件版没有磁盘上的 native/，靠 extractXetBinary() 把内嵌的 xet-dl 落盘后调用。
+const XET_EXE = process.platform === "win32" ? ".exe" : "";
+const XET_APP_DIR = appDir();
+// 内嵌下载器的释放有 IO，放进候选列表的 getter 里，等第一次真的要用 Xet 时才执行。
+function xetBinCandidates() {
+  return [
+    process.env.XET_DL_BIN,
+    extractXetBinary(),
+    path.join(XET_APP_DIR, "native", "bin", `xet-dl${XET_EXE}`),
+    path.join(XET_APP_DIR, "native", "xet-dl", "target", "release", `xet-dl${XET_EXE}`),
+    path.join(process.cwd(), "native", "bin", `xet-dl${XET_EXE}`),
+    path.join(process.cwd(), "native", "xet-dl", "target", "release", `xet-dl${XET_EXE}`),
+  ].filter(Boolean);
+}
 const XET_TMP_SUFFIX = ".xet-partial";
 // Xet 续传状态文件目录。刻意不放在下载目录里：那里是给用户看的模型仓，
 // 多出一堆 .json 会被本地文件列表当成散落文件，也会污染 basalt 的扫描。
@@ -142,7 +164,7 @@ function abortError(message) {
 /** 找到可用的 Rust 下载器（只探测一次） */
 function xetBin() {
   if (xetBinPath !== null) return xetBinPath;
-  const found = XET_BIN_CANDIDATES.find((candidate) => {
+  const found = xetBinCandidates().find((candidate) => {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
       return true;

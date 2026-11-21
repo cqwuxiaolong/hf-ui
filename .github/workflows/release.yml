@@ -1,0 +1,170 @@
+name: 构建并发布单文件版本
+
+# 打 v* 标签（或手动触发）时，在三个平台各出一个内嵌前端的裸可执行文件，
+# 汇总到一个 GitHub Release；手动触发只出 Artifacts，便于排查构建问题。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: "26"
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64
+            runs_on: ubuntu-22.04
+            target: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+            exe: ""
+          - label: macOS Apple Silicon
+            runs_on: macos-14
+            target: macos-arm64
+            rust_target: aarch64-apple-darwin
+            exe: ""
+          - label: Windows x86_64
+            runs_on: windows-latest
+            target: windows-x64
+            rust_target: x86_64-pc-windows-msvc
+            exe: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rustls 默认走 aws-lc-sys，Windows 上它需要 NASM 与 CMake（runner 一般预装，缺失时兜底）
+      - name: 补齐 Windows 构建依赖（NASM / CMake）
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v nasm  >/dev/null 2>&1 || { choco install nasm  -y --no-progress; echo "C:\\Program Files\\NASM" >> "$GITHUB_PATH"; }
+          command -v cmake >/dev/null 2>&1 || { choco install cmake -y --no-progress --installargs 'ADD_CMAKE_TO_PATH=System'; }
+          nasm -v
+          cmake --version | head -1
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 编译内嵌的 Xet 下载器（Rust）
+        run: cargo build --release --locked --target ${{ matrix.rust_target }} --manifest-path native/xet-dl/Cargo.toml
+
+      - name: 放置下载器到打包脚本约定的位置
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native/bin
+          cp -f "native/xet-dl/target/${{ matrix.rust_target }}/release/xet-dl${{ matrix.exe }}" "native/bin/xet-dl${{ matrix.exe }}"
+          ls -l native/bin
+
+      - name: 打包成单个可执行文件
+        run: node scripts/build-sea.mjs --target=${{ matrix.target }}
+
+      - name: 冒烟测试：启动产物并检查首页与接口
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="release-build/hf-ui-${{ matrix.target }}${{ matrix.exe }}"
+          PORT=2270 HOST=127.0.0.1 DOWNLOAD_DIR="$RUNNER_TEMP/dl" "$BIN" > server.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 30); do
+            sleep 1
+            curl -fsS "http://127.0.0.1:2270/api/tasks" >/dev/null && break
+            if ! kill -0 "$PID" 2>/dev/null; then cat server.log; exit 1; fi
+          done
+          curl -fsS "http://127.0.0.1:2270/" -o index.out
+          grep -q "HF 模型管理器" index.out
+          # 内嵌的 hash 资源必须能被取到（前端页面引用的那个文件名）
+          ASSET=$(grep -o '/assets/index-[A-Za-z0-9_-]*\.js' index.out | head -1)
+          test -n "$ASSET"
+          curl -fsS -o /dev/null -H 'Accept: */*' "http://127.0.0.1:2270$ASSET"
+          curl -fsS "http://127.0.0.1:2270/api/config" -o config.out
+          grep -q '"downloadDir"' config.out
+          echo "----- 启动日志 -----"; cat server.log
+          kill "$PID"
+
+      - name: 冒烟测试（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PORT = "2270"; $env:HOST = "127.0.0.1"; $env:DOWNLOAD_DIR = "$env:RUNNER_TEMP\\dl"
+          $p = Start-Process -FilePath "release-build\\hf-ui-windows-x64.exe" -PassThru -RedirectStandardOutput server.log -RedirectStandardError server.err -WindowStyle Hidden
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            try { Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:2270/api/tasks" | Out-Null; $ok = $true; break } catch {}
+            if ($p.HasExited) { break }
+          }
+          Get-Content server.log -ErrorAction SilentlyContinue
+          Get-Content server.err -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "单文件版启动失败" }
+          $html = (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:2270/").Content
+          if ($html -notmatch "HF 模型管理器") { throw "首页内容不对" }
+          $asset = [regex]::Match($html, "/assets/index-[A-Za-z0-9_-]*\.js").Value
+          if (-not $asset) { throw "首页里没有内嵌 js 的引用" }
+          Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:2270$asset" | Out-Null
+          Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:2270/api/config" | Out-Null
+          Stop-Process -Id $p.Id -Force
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-ui-${{ matrix.target }}
+          path: |
+            release-build/hf-ui-${{ matrix.target }}${{ matrix.exe }}
+            release-build/hf-ui-${{ matrix.target }}${{ matrix.exe }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: 汇总发布 GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hf-ui-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: 创建（或更新）Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ls -l artifacts
+          FILES=(artifacts/*)
+          [ ${#FILES[@]} -gt 0 ] || { echo "没有产物可发布"; exit 1; }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+          else
+            gh release create "$TAG" "${FILES[@]}" \
+              --title "$TAG" \
+              --notes "单文件版本：内嵌 Web 界面与 Xet 下载器，下载后 chmod +x 直接运行（见 README 的「单文件版」一节）。"
+          fi
+          gh release view "$TAG" --json tagName,assets --jq '.tagName + " 附件: " + ([.assets[].name] | join(", "))'

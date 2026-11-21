@@ -1,7 +1,6 @@
 import express from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   ENDPOINT,
   clearHfCaches,
@@ -38,10 +37,47 @@ import {
 } from "./downloads.js";
 import { deleteLocal, listLocalFiles } from "./local.js";
 import { createDir, listDir, listRoots } from "./fsbrowse.js";
+import { IS_SEA, appDir, appMeta, sourceDir } from "./sea.js";
+import { embeddedWebMiddleware } from "./webroot.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// 打包进单文件后 import.meta.url 会被丢掉（CJS 里没有），取不到就说明没有磁盘上的 dist
+const SRC_DIR = sourceDir();
+const STATIC_DIST = SRC_DIR ? path.join(SRC_DIR, "..", "dist") : null;
 const PORT = Number(process.env.PORT || 2270);
 const HOST = process.env.HOST || "0.0.0.0";
+
+const ARGS = process.argv.slice(2);
+const META = appMeta();
+
+if (ARGS.includes("--version") || ARGS.includes("-V")) {
+  console.log(`${META.name} ${META.version} · 目标平台 ${META.target} · Node ${process.versions.node}${IS_SEA ? " · 单文件（前端与下载器已内嵌）" : " · 源码运行"}`);
+  process.exit(0);
+}
+
+if (ARGS.includes("--help") || ARGS.includes("-h")) {
+  console.log(`
+HF 模型管理器（浏览器界面 + 本地服务）
+
+  用法：${IS_SEA ? process.argv[1] : "node server/index.js"} [选项]
+
+  选项
+    -h, --help      显示本帮助
+    -V, --version   显示版本
+
+  环境变量
+    PORT=2270            监听端口
+    HOST=0.0.0.0         监听地址（只想本机访问就设 127.0.0.1）
+    DOWNLOAD_DIR=...     模型下载目录（单文件版默认可执行文件旁边的 downloads/）
+    SETTINGS_FILE=...    设置文件位置（默认程序旁 settings.json，只读时退到用户配置目录）
+    HF_TOKEN=...         Hugging Face 访问令牌（也可在界面上配置）
+    HF_ENDPOINT=...      镜像站地址，默认 https://hf-mirror.com
+    DOWNLOAD_ENGINE=...  auto | xet | fetch，默认 auto（有 xet-dl 就用 Xet 多连接）
+    XET_DL_BIN=...       指定外部 xet-dl 可执行文件
+
+  启动后浏览器打开 http://localhost:${PORT}
+`);
+  process.exit(0);
+}
 
 const app = express();
 app.use(express.json({ limit: "256kb" }));
@@ -348,9 +384,12 @@ app.post("/api/tasks/resume-all", wrap(async (_req, res) => {
 
 app.use("/api", (_req, res) => bad(res, 404, "接口不存在"));
 
-// 生产模式：托管 vite 构建产物
-const dist = path.join(__dirname, "..", "dist");
-if (fs.existsSync(path.join(dist, "index.html"))) {
+// 生产模式：托管 vite 构建产物。单文件版从内存里发（前端已内嵌），普通部署读磁盘上的 dist。
+const embedded = embeddedWebMiddleware();
+const dist = STATIC_DIST;
+if (embedded) {
+  app.use(embedded);
+} else if (dist && fs.existsSync(path.join(dist, "index.html"))) {
   app.use(express.static(dist, { index: "index.html" }));
   app.use((req, res, next) => {
     if (req.method !== "GET" || req.path.startsWith("/api")) return next();
@@ -369,27 +408,36 @@ HF 模型管理器 API 已启动（端口 ${PORT}），但还没有前端构建�
   });
 }
 
-// 老版本的 org__repo 目录 → org/repo 两层结构（同一文件系统 rename，瞬时，不动文件内容）
-{
+// 打包成单文件时入口是 CommonJS，不支持顶层 await，所以启动流程包在一个 async 函数里。
+async function start() {
+  // 老版本的 org__repo 目录 → org/repo 两层结构（同一文件系统 rename，瞬时，不动文件内容）
   const moved = await migrateLegacyRepoDirs();
   for (const m of moved) console.log(`  目录升级       →  ${m.from}  →  ${m.to}`);
   if (moved.length) console.log("");
+
+  app.listen(PORT, HOST, () => {
+    console.log(`\n  HF 模型管理器 ${META.version}  →  http://localhost:${PORT}`);
+    console.log(`  镜像站         →  ${ENDPOINT}`);
+    console.log(`  下载目录       →  ${getDownloadDir()}`);
+    console.log(
+      `  运行形态       →  ${IS_SEA ? `单文件（目标 ${META.target}，前端与 xet-dl 已内嵌）· 程序目录 ${appDir()}` : "源码运行（pnpm start）"}`,
+    );
+    console.log(
+      `  Xet 调优       →  高性能${getXetHighPerformance() ? "开（并发 124）" : "关（并发 64）"} / 缓冲预算 ${getXetMemoryBudgetMb()} MB`,
+    );
+    const tk = tokenStatus();
+    console.log(
+      `  访问令牌       →  ${
+        tk.hasToken
+          ? `已配置 ${tk.hint}（来源：${tk.source === "env" ? "环境变量" : "界面设置"}）`
+          : tk.source === "cleared"
+            ? "已在界面上清除（忽略 HF_TOKEN 环境变量）"
+            : "未配置（仅公开仓库；点界面顶部「未配置令牌」配置）"
+      }\n`);
+  });
 }
 
-app.listen(PORT, HOST, () => {
-  console.log(`\n  HF 模型管理器  →  http://localhost:${PORT}`);
-  console.log(`  镜像站         →  ${ENDPOINT}`);
-  console.log(`  下载目录       →  ${getDownloadDir()}`);
-  console.log(
-    `  Xet 调优       →  高性能${getXetHighPerformance() ? "开（并发 124）" : "关（并发 64）"} / 缓冲预算 ${getXetMemoryBudgetMb()} MB`,
-  );
-  const tk = tokenStatus();
-  console.log(
-    `  访问令牌       →  ${
-      tk.hasToken
-        ? `已配置 ${tk.hint}（来源：${tk.source === "env" ? "环境变量" : "界面设置"}）`
-        : tk.source === "cleared"
-          ? "已在界面上清除（忽略 HF_TOKEN 环境变量）"
-          : "未配置（仅公开仓库；点界面顶部「未配置令牌」配置）"
-    }\n`);
+start().catch((err) => {
+  console.error("[启动失败]", err);
+  process.exit(1);
 });

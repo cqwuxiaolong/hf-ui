@@ -29,6 +29,49 @@ pnpm start
 
 打开 http://localhost:2270
 
+## 单文件版（Releases 下载）
+
+不想装 Node 也可以：[Releases](https://github.com/cqwuxiaolong/hf-ui/releases) 里每个平台**一个可执行文件**，
+里面同时装了 Node 运行时、服务端、构建好的 Web 界面和 Rust 写的 Xet 下载器（Node SEA 内嵌资源）。
+双击 / 命令行启动后同样打开 http://localhost:2270。
+
+| 文件 | 平台 |
+| --- | --- |
+| `hf-ui-linux-x64` | Linux x86_64（glibc ≥ 2.35，Ubuntu 22.04 / Debian 12 / Fedora 38 起） |
+| `hf-ui-macos-arm64` | Apple Silicon（macOS 12+） |
+| `hf-ui-windows-x64.exe` | Windows 10 / 11 x86_64 |
+
+```bash
+# Linux / macOS
+chmod +x hf-ui-linux-x64            # macOS 拿到的是未公证的 ad-hoc 签名，被拦时再执行下一行
+xattr -dr com.apple.quarantine hf-ui-macos-arm64
+./hf-ui-linux-x64 --help            # 看所有环境变量；--version 看版本与内嵌信息
+```
+
+- Windows：首次运行若 SmartScreen 提示「未知发布者」，点「仍要运行」。
+- 下载目录默认在可执行文件旁边的 `downloads/`；那一层不可写（如放进 `Program Files`）时自动改用到
+  用户数据目录。设置文件同理（先试 `settings.json` 放在程序旁，只读时退到用户配置目录），
+  也可用 `DOWNLOAD_DIR` / `SETTINGS_FILE` 明确指定。
+- 内嵌的 Xet 下载器第一次用到时释放到用户缓存目录（Linux `~/.cache/hf-web-manager/bin/<版本>/xet-dl`，
+  macOS `~/Library/Caches/hf-web-manager/…`，Windows `%LOCALAPPDATA%\hf-web-manager\cache\…`），
+  想指定外部下载器仍可用 `XET_DL_BIN`。
+- 附件里的 `.sha256` 用于校验下载完整性：`sha256sum -c hf-ui-linux-x64.sha256`。
+
+### 自己打单文件包
+
+```bash
+pnpm install
+# 1) 先编译内嵌的 Rust 下载器（Linux x64 为例）
+cargo build --release --locked --target x86_64-unknown-linux-gnu --manifest-path native/xet-dl/Cargo.toml
+mkdir -p native/bin && cp native/xet-dl/target/x86_64-unknown-linux-gnu/release/xet-dl native/bin/xet-dl
+# 2) 出包（内含 vite build，产物在 release-build/）
+pnpm run package:sea            # 或 node scripts/build-sea.mjs --target=windows-x64
+```
+
+单文件版不能跨平台交叉编译（底座就是当前这台机器上的 Node），三个平台的包由
+`.github/workflows/release.yml` 在各自的 runner 上构建：推 `v*` 标签即自动出包并汇总成一个 Release，
+也可以在工作流页面手动 `Run workflow`（只上传 Artifacts，不发 Release）。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
@@ -38,11 +81,11 @@ pnpm start
 | `HF_ENDPOINT` | `https://hf-mirror.com` | 镜像站地址，可改为 `https://huggingface.co` |
 | `HF_TOKEN` | 空 | 访问私有 / 门控仓库所需的访问令牌，只作**启动时的初始值**；日常请在界面点顶部「未配置令牌 / 令牌 ✓」芯片配置，保存进 `settings.json` 的 `hfToken`（文件权限 0600，界面与接口只显示掩码） |
 | `HF_ACCESS_TOKEN` | 空 | `HF_TOKEN` 的别名（与 huggingface 工具链一致），仅在 `HF_TOKEN` 为空时使用 |
-| `DOWNLOAD_DIR` | `./downloads` | 下载目录初始值（也可在界面右栏修改） |
+| `DOWNLOAD_DIR` | `./downloads` | 下载目录初始值（也可在界面右栏修改）；单文件版默认改成可执行文件旁边的 `downloads/`，不可写时退到用户数据目录 |
 | `MAX_CONCURRENT_DOWNLOADS` | `2` | 同时下载的任务数 |
-| `SETTINGS_FILE` | `./settings.json` | 设置持久化文件路径 |
+| `SETTINGS_FILE` | `./settings.json` | 设置持久化文件路径；单文件版默认 `<可执行文件目录>/settings.json`，不可写时退到用户配置目录 |
 | `DOWNLOAD_ENGINE` | `auto` | 下载引擎：`auto`（Xet 可用就用，否则 fetch）/ `xet`（强制 Xet）/ `fetch`（只用 Node） |
-| `XET_DL_BIN` | 空 | 自定义 Rust 下载器路径（默认找 `native/bin/xet-dl`） |
+| `XET_DL_BIN` | 空 | 自定义 Rust 下载器路径（源码运行默认找 `native/bin/xet-dl`；单文件版默认释放内嵌的那份到用户缓存目录） |
 | `STALL_TIMEOUT_XET_MS` | `600000` | Xet 任务的「无进展」判定窗口（Xet 要先攒满一整块 50–260 MB 才落盘一次，慢启动是正常的，所以比 fetch 宽松很多） |
 | `XET_MEMORY_BUDGET_MB` | `1024` | 传给 Rust 下载器的 Xet 重建缓冲内存预算，控制并发缓冲上限；机器内存紧张时调小（如 `512`）。**界面右栏「Xet 下载调优」可直接改，环境变量只作首次的初始值** |
 | `XET_KEEP_HIGH_PERFORMANCE` | 空 | 设置后保留 `HF_XET_HIGH_PERFORMANCE=1`（高性能：下载并发 64 → 124）。**界面右栏「高性能模式」勾选框就是它，勾选状态持久化后覆盖环境变量** |
@@ -141,7 +184,9 @@ pnpm run build:native   # 产物 native/bin/xet-dl
 
 ```
 server/
-  index.js      # Express 路由与静态托管
+  index.js      # Express 路由与静态托管（--help / --version / 启动横幅）
+  sea.js        # 单文件（Node SEA）支持层：是否打包态、程序所在目录、配置/数据/缓存目录、内嵌资源读取、释放 xet-dl
+  webroot.js    # 单文件版把内嵌的 dist/** 当静态站托管（MIME、ETag/304、immutable、SPA 回退）
   hf.js         # 模型搜索、文件列表、直链生成（@huggingface/hub）
   downloads.js  # 下载任务队列、进度、双引擎（Xet / 直连）、下载目录设置、老目录升级
   local.js      # 已下载文件扫描（按 owner/repo 分组）与删除（含路径越界保护）
@@ -150,12 +195,27 @@ server/
 native/
   xet-dl/       # Rust Xet 下载器（Cargo 包，NDJSON 进度）
   bin/xet-dl    # 编译产物（可选，缺失时自动回退 fetch）
+scripts/
+  build-sea.mjs # 出单文件包：vite build → esbuild 打包 server → 组装内嵌资源 → node --build-sea → sha256
+.github/
+  workflows/release.yml  # 三平台（linux-x64 / macos-arm64 / windows-x64）构建 + 冒烟测试 + 汇总 Release
 src/
   main.js       # 前端逻辑（原生 JS）
   style.css     # 样式
 index.html
 vite.config.js
 ```
+
+## 命令行参数
+
+`node server/index.js`（源码运行）与单文件可执行文件支持同一组参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `-h` / `--help` | 打印用法与全部环境变量（变量名与上面的表格一致） |
+| `-V` / `--version` | 打印版本、目标平台、Node 版本、是否单文件运行 |
+
+启动横幅也会显示当前「运行形态」：单文件（含目标平台与内嵌 Web 文件数）或源码运行。
 
 ## HTTP 接口
 

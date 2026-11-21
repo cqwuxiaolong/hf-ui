@@ -4,6 +4,81 @@
 
 ---
 
+## 2026-11-21（第 6 轮）服务器编译成单个可执行文件（内嵌 Web）+ 三平台 Release 工作流
+
+### 本次完成
+1. **单文件可执行（Node SEA）方案落地**：一个可执行文件里同时装了 Node 运行时、Express 服务端、
+   vite 构建好的 Web 界面、以及 Rust 写的 Xet 下载器，用 Node 26 的 SEA 内嵌资源（`assets`）实现，
+   不需要任何外部目录，也不需要目标机器装 Node。
+   - `scripts/build-sea.mjs`（新增）：`vite build` → `esbuild` 把 `server/index.js` 打成单文件 CJS
+     （`bundle/platform:node/format:cjs/target:node26/external:["node:sea"]`，1 281 KB）→ 组装内嵌资源
+     `build/sea-assets/{web/**,bin/xet-dl}` + `build/meta.json` → 生成 `build/sea-config.json` →
+     `node --build-sea` → 产物 `release-build/hf-ui-<target>[.exe]` 与同名 `.sha256`；macOS 自动
+     `codesign --force --sign -`（ad-hoc）。支持 `--target=linux-x64|linux-arm64|macos-x64|macos-arm64|windows-x64`
+     与 `--skip-web`；跨平台会明确报错（SEA 底座只能是当前这台机器的 Node）。
+   - `server/sea.js`（新增）：`IS_SEA` / `sourceDir()` / `appDir()` / `isWritable()` /
+     `configHome()`+`dataHome()`+`cacheHome()`（Linux/macOS/Windows 三平台各按本机 XDG 口径）/
+     `assetKeys()`+`asset()` / `appMeta()` / `extractXetBinary()`（把内嵌 `bin/xet-dl` 释放到
+     `cacheHome()/bin/<版本>/xet-dl`，chmod 755，先写 tmp 再 rename，文件被占用时退到带 pid 的文件名，结果进程内缓存）。
+   - `server/webroot.js`（新增）：把内嵌 `web/**` 变成静态站（自带 MIME 表；`assets/` 前缀
+     `public, max-age=31536000, immutable`，其余 `no-cache`；sha1 ETag + `If-None-Match` → 304；
+     无扩展名的 GET 回 `index.html` 支持 SPA，带扩展名未命中返回 404）。非打包态返回 `null`，行为不变。
+2. **服务端改造为两种形态共用一套代码**：
+   - `server/index.js`：`SRC_DIR = sourceDir()`（打包后为空，避免 `fileURLToPath(undefined)` 崩）；
+     静态托管三态「内嵌 Web → `dist/` → 提示先 build」；新增 `--help/-h`、`--version/-V`（读 `appMeta()`）；
+     启动横幅新增「运行形态」行；**顶层 await 收进 `async function start()`**（SEA 的 main 是 CJS，不支持 TLA）。
+   - `server/downloads.js`：去掉 `fileURLToPath`；下载目录改为 `defaultDownloadDir()`（源码运行仍是
+     `cwd/downloads`；单文件优先可执行文件旁 `downloads/`，不可写退到用户数据目录）；Xet 下载器查找改为惰性
+     候选链 `XET_DL_BIN` → 内嵌释放 → 可执行文件旁 → `cwd/native/...`（Windows 自动加 `.exe`）。
+   - `server/settings.js`：默认 `<程序目录>/settings.json`，不可写退到用户配置目录；保存前 `mkdirSync`。
+3. **依赖与元信息**：`package.json` 加 `packageManager: pnpm@12.21.0`、`scripts["package:sea"]`、
+   `devDependencies.esbuild ^0.28.2`、`pnpm.onlyBuiltDependencies:["esbuild"]`；新建 `pnpm-workspace.yaml`
+   同名配置；`pnpm-lock.yaml` 已用 pnpm 更新（未引入 npm/yarn 锁）；`.gitignore` 加 `build/`、`release-build/`。
+4. **三平台 Release 工作流** `.github/workflows/release.yml`（新增，js-yaml 解析校验通过）：
+   matrix = `ubuntu-22.04`→linux-x64、`macos-14`→macos-arm64、`windows-latest`→windows-x64；
+   每块跑 `pnpm install --frozen-lockfile` → `cargo build --release --locked --target <triple>` →
+   `node scripts/build-sea.mjs --target=…` → **冒烟测试**（起 exe，curl `/`、`/assets/index-*.js`、
+   `/api/tasks`、`/api/config` 并校验内容；Windows 用 pwsh 同套断言）→ `upload-artifact`；
+   `release` job 仅在推 `v*` 标签时把三平台产物（含 `.sha256`）汇总成一个 GitHub Release。
+   触发：推 `v*` 标签，或工作流页面手动 `Run workflow`（只出 Artifacts 不发 Release）。
+5. **文档**：README 新增「单文件版（Releases 下载）」（平台表、`chmod`/`xattr`/SmartScreen、下载目录与设置
+   回退、xet-dl 释放路径、`.sha256` 校验、自己打单文件包的命令、CI 说明）与「命令行参数」一节；
+   「目录结构」补 `server/sea.js`、`server/webroot.js`、`scripts/build-sea.mjs`、`.github/workflows/release.yml`。
+
+### 未完成与挂账
+- **三平台 CI 尚未实跑**：本轮只有 Linux x86_64 产物在本机验证过。推标签后需盯 `gh run watch`，
+  重点风险：① Windows runner 的 NASM/CMake（xet-dl 依赖，workflow 里已加 choco 兜底）；
+  ② `ubuntu-22.04` runner 是否仍可用（决定 glibc 基线，改成 `ubuntu-24.04` 会把基线抬到 2.39）；
+  ③ macOS codesign 与 Gatekeeper；④ `--build-sea` 在 Windows 的产物命名（脚本已处理重复 `.exe`）。
+  跑通后把 Release 链接与 tag 记回本文件。
+- **macOS 只出 Apple Silicon（arm64）**：Intel mac（macos-x64）暂无 runner 覆盖，需要时补 `macos-13`。
+- **Linux 基线是 glibc ≥ 2.35**（在 ubuntu-22.04 runner 上编译）：更老的发行版（CentOS 7 / Debian 11）
+  跑不起来，README 平台表已注明；要更宽兼容需改为在静态 musl / 更老容器里构建，未做。
+
+### 验证与版本
+- 出包：`node scripts/build-sea.mjs` → `release-build/hf-ui-linux-x64` **81 831 704 B**，
+  `sha256 = 0b31b82e7f13f9a4451af04ec8f5efc78adc7dcf53173f0ecc9701936d3326ce`。
+- **脱离仓库运行**（在 `/tmp/hfsearun` 启动 exe）：横幅显示「运行形态 → 单文件（目标 linux-x64…）」。
+- HTTP 全绿：`/` 200（text/html 9 403 B，`Cache-Control: no-cache`）、`/index.html` 200、
+  `/assets/index-kU_0k8CQ.js` 200（125 005 B，`public, max-age=31536000, immutable` + ETag）、
+  `/assets/index-BfRwmCXB.css` 200、`/api/tasks` 200、`/api/config` 200、
+  `/some/spa/path` 200（SPA 回退）、`/missing.png` 404。
+- **真下载**：`distilbert/distilbert-base-uncased/config.json` → done（engine=fetch，落盘 483 B）；
+  `HuggingFaceTB/SmolLM2-135M/model.safetensors` → **engine=xet**（证明内嵌下载器被释放并成功 spawn）。
+- 内嵌下载器释放物：`~/.cache/hf-web-manager/bin/1.0.0/xet-dl`（13 236 104 B，`-rwxr-xr-x`，`--help` 正常）。
+- **源码运行回归**：`node server/index.js`（PORT 2291）`/`、`/assets/*.js`、`/api/tasks`、`/api/config` 全 200，
+  `/api/nope` 404；`node server/index.js --version` → `hf-web-manager 1.0.0 · 目标平台 source · Node 26.13.1 · 源码运行`。
+- 依赖安装：`pnpm install --frozen-lockfile` 通过（`onlyBuiltDependencies` 已放行 esbuild 的构建脚本）。
+- 工具与版本：pnpm 12.21.0、node v26.13.1、cargo/rustc 1.96.1、`gh 2.28.0`（账号 cqwuxiaolong）。
+
+### 跳过项
+- 本轮新增的验证全部走命令行（curl / 直接起 exe），**未安装任何桌面 app / GUI / 系统浏览器**，
+  也不存在「因禁止安装桌面 app 而跳过」的项。
+- Windows / macOS 产物本机无法验证（不在本机平台，且 SEA 不能交叉编译），只能在 CI 的对应 runner 上冒烟。
+- 未做代码签名证书 / macOS 公证（仅 ad-hoc 签名），未加自动更新检查。
+
+---
+
 ## 2026-11-21（第 5 轮）GitHub 建仓并推送
 
 ### 本次完成

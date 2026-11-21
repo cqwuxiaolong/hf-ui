@@ -9,7 +9,8 @@
     "build": "vite build",
     "start": "node server/index.js",
     "build:native": "cargo build --release --manifest-path native/xet-dl/Cargo.toml --target-dir native/xet-dl/target && mkdir -p native/bin && cp -f native/xet-dl/target/release/xet-dl native/bin/xet-dl",
-    "preview": "pnpm build && node server/index.js"
+    "preview": "pnpm build && node server/index.js",
+    "package:sea": "node scripts/build-sea.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -22,6 +23,13 @@
   },
   "devDependencies": {
     "concurrently": "^10.0.7",
+    "esbuild": "^0.28.2",
     "vite": "^8.3.8"
-  }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "packageManager": "pnpm@12.21.0"
 }
